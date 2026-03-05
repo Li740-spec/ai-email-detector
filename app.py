@@ -11,8 +11,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 # 載入模型 (請確認 models 資料夾路徑正確)
 try:
-    clf = joblib.load('models/clf_zh.joblib')
-    tfidf = joblib.load('models/tfidf_zh.joblib')
+    clf = joblib.load('clf_zh.joblib')
+    tfidf = joblib.load('tfidf_zh.joblib')
     print("AI Model Loaded Successfully!")
 except Exception as e:
     print(f"Model Load Error: {e}")
