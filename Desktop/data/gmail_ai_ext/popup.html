@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { 
+            width: 280px; 
+            padding: 15px; 
+            font-family: "Microsoft JhengHei", sans-serif; 
+            text-align: center; 
+            background: #fdfdfd; 
+        }
+        .logo { font-size: 30px; margin-bottom: 5px; }
+        h2 { margin: 5px 0; font-size: 18px; color: #2c3e50; }
+        .sub { font-size: 11px; color: #95a5a6; margin-bottom: 20px; }
+        
+        #detect-btn { 
+            width: 100%; padding: 12px; background: #3498db; color: white; 
+            border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold;
+            box-shadow: 0 4px 6px rgba(52, 152, 219, 0.2); transition: 0.3s;
+        }
+        #detect-btn:hover { background: #2980b9; }
+
+        #result { 
+            margin: 20px 0; padding: 12px; background: #fff; border: 1px solid #eee;
+            border-radius: 10px; min-height: 80px; display: flex; flex-direction: column; justify-content: center;
+        }
+
+        .progress-container { background: #eee; border-radius: 10px; height: 10px; width: 100%; margin: 10px 0; overflow: hidden; }
+        .progress-bar { height: 100%; width: 0%; transition: width 0.8s ease-in-out; }
+
+        .feedback-group { display: none; margin-top: 15px; border-top: 1px dashed #ccc; padding-top: 15px; }
+        .fb-btn { padding: 6px 12px; margin: 5px; font-size: 12px; cursor: pointer; border-radius: 5px; border: 1px solid #ddd; background: #fff; }
+        .fb-safe { color: #27ae60; border-color: #27ae60; }
+        .fb-phish { color: #c0392b; border-color: #c0392b; }
+    </style>
+</head>
+<body>
+    <div class="logo">🛡️</div>
+    <h2>AI 郵件安全專家</h2>
+    <div class="sub">基於隨機森林模型即時分析</div>
+    
+    <button id="detect-btn">一鍵偵測此郵件</button>
+
+    <div id="result">
+        <span style="color: #95a5a6;">請開啟 Gmail 郵件後點擊偵測</span>
+    </div>
+
+    <div id="feedback-area" class="feedback-group">
+        <p style="font-size: 12px; margin: 0 0 10px 0; color: #7f8c8d;">結果準確嗎？點擊回饋幫助 AI 學習</p>
+        <button id="fb-safe" class="fb-btn fb-safe">✅ 正常</button>
+        <button id="fb-phish" class="fb-btn fb-phish">🚩 釣魚</button>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

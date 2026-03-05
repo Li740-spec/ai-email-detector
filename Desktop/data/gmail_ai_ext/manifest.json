@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "AI 郵件安全專家",
+  "version": "1.2",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://ai-email-detector-iuns.onrender.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["content.js"]
+    }
+  ]
+}
