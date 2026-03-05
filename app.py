@@ -1,20 +1,21 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS  # <--- 核心：處理連線問題
+from flask_cors import CORS  # 必須安裝 pip install flask-cors
 import joblib
 import os
 import pandas as pd
+import numpy as np
 
 app = Flask(__name__)
-# 允許所有來源連線，解決「連線失敗」問題
+# 終極 CORS 設定：允許所有來源、所有標頭
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# 載入 AI 模型
+# 載入模型 (請確認 models 資料夾路徑正確)
 try:
     clf = joblib.load('models/clf_zh.joblib')
     tfidf = joblib.load('models/tfidf_zh.joblib')
-    print("模型載入成功！")
+    print("AI Model Loaded Successfully!")
 except Exception as e:
-    print(f"模型載入失敗: {e}")
+    print(f"Model Load Error: {e}")
 
 @app.route('/')
 def home():
@@ -25,29 +26,38 @@ def predict():
     try:
         data = request.json
         text = data.get('text', '')
-        if not text:
-            return jsonify({'label': 'empty'})
+        if not text or len(text) < 2:
+            return jsonify({'label': 'safe', 'phish_prob': 0, 'keywords': []})
         
-        # AI 預測邏輯
         vec = tfidf.transform([text])
         label = clf.predict(vec)[0]
-        return jsonify({'label': label})
+        probs = clf.predict_proba(vec)[0] # [安全, 釣魚]
+        phish_prob = round(probs[1] * 100, 1)
+        
+        # 抓取影響最大的詞 (可解釋性)
+        feature_names = tfidf.get_feature_names_out()
+        weights = vec.toarray()[0]
+        top_indices = weights.argsort()[-3:][::-1]
+        keywords = [feature_names[i] for i in top_indices if weights[i] > 0]
+
+        return jsonify({
+            'label': label,
+            'phish_prob': phish_prob,
+            'keywords': keywords
+        })
     except Exception as e:
+        print(f"Predict Error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/feedback', methods=['POST'])
 def feedback():
     try:
         data = request.json
-        text = data.get('text', '')
-        label = data.get('label', '')
-        
-        # 存入 CSV
-        df = pd.DataFrame([[text, label]], columns=['Email Text', 'Email Type'])
+        df = pd.DataFrame([[data.get('text'), data.get('label')]], columns=['Email Text', 'Email Type'])
         df.to_csv('feedback.csv', mode='a', index=False, header=not os.path.exists('feedback.csv'))
         return jsonify({'status': 'success'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except:
+        return jsonify({'status': 'error'}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5001))
