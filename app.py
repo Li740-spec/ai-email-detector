@@ -1,61 +1,47 @@
-import csv
-import os
-import joblib
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import joblib
+import os
+import pandas as pd
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # 這行最重要，允許插件從不同網址存取
 
-# 載入模型函數
-def load_models():
-    try:
-        clf = joblib.load('models/clf_zh.joblib')
-        vec = joblib.load('models/tfidf_zh.joblib')
-        return clf, vec
-    except:
-        return None, None
+# 載入模型
+try:
+    clf = joblib.load('models/clf_zh.joblib')
+    tfidf = joblib.load('models/tfidf_zh.joblib')
+except:
+    print("模型載入失敗，請確認 models 資料夾路徑。")
 
 @app.route('/')
 def home():
-    return "AI Server is running!"
+    return "AI Email Detector Server is Running!"
 
-@app.route('/detect', methods=['POST'])
-def detect():
+@app.route('/predict', methods=['POST'])
+def predict():
     data = request.json
-    content = data.get('content', '')
-    clf, vec = load_models()
+    text = data.get('text', '')
     
-    if not clf or not vec:
-        return jsonify({"error": "模型尚未訓練，請先執行 train_multilang.py"}), 500
+    # 預測邏輯
+    vec = tfidf.transform([text])
+    label = clf.predict(vec)[0]
     
-    # 進行預測
-    X = vec.transform([content])
-    prob = round(clf.predict_proba(X)[0][1] * 100, 2)
-    prediction = "Phishing Email" if prob > 50 else "Safe Email"
-    
-    print(f"--- 偵測請求 ---")
-    print(f"內容節錄: {content[:30]}...")
-    print(f"結果: {prediction} ({prob}%)")
-    
-    return jsonify({"prediction": prediction, "probability": prob})
+    return jsonify({'label': label})
 
 @app.route('/feedback', methods=['POST'])
 def feedback():
     data = request.json
-    content = data.get('content', '')
+    text = data.get('text', '')
     label = data.get('label', '')
     
-    # 存入 feedback.csv (錯題本)
-    file_exists = os.path.isfile('feedback.csv')
-    with open('feedback.csv', mode='a', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(['Email Text', 'Email Type'])
-        writer.writerow([content, label])
+    # 存入 CSV
+    df = pd.DataFrame([[text, label]], columns=['Email Text', 'Email Type'])
+    df.to_csv('feedback.csv', mode='a', index=False, header=not os.path.exists('feedback.csv'))
     
-    print(f"📥 已存入糾正樣本：這封信其實是 {label}")
-    return jsonify({"status": "success"})
+    return jsonify({'status': 'success'})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    # Render 會自動指定 PORT
+    port = int(os.environ.get('PORT', 5001))
+    app.run(host='0.0.0.0', port=port)
