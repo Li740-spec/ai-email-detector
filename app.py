@@ -4,13 +4,12 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-# 徹底開放權限，防止插件連線失敗
+# 徹底開放 CORS 權限
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# 設定模型路徑
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 載入模型與向量化工具
+# 載入模型
 try:
     clf = joblib.load(os.path.join(BASE_DIR, 'clf_zh.joblib'))
     tfidf = joblib.load(os.path.join(BASE_DIR, 'tfidf_zh.joblib'))
@@ -30,28 +29,32 @@ def predict():
         
     try:
         data = request.get_json()
-        text = data.get('text', '測試郵件內容')
+        text = data.get('text', '')
 
         if not clf:
             return jsonify({'error': '模型未就緒'}), 500
+        if not text:
+            return jsonify({'label': 'safe', 'phish_prob': 0.0, 'keywords': []})
 
-        # 預測
+        # AI 預測
         vec = tfidf.transform([text])
         label = clf.predict(vec)[0]
-        prob = clf.predict_proba(vec)[0][1] # 釣魚機率
+        prob = clf.predict_proba(vec)[0][1]
 
-        # 關鍵字提取 (選權重最高的前三個)
+        # 關鍵字提取
         feature_names = tfidf.get_feature_names_out()
         weights = vec.toarray()[0]
         top_indices = weights.argsort()[-3:][::-1]
-        keywords = [feature_names[i] for i in top_indices if weights[i] > 0]
+        # 確保所有變數都轉型為原生 Python 類型 (str, float)
+        keywords = [str(feature_names[i]) for i in top_indices if weights[i] > 0]
 
         return jsonify({
-            'label': label,
-            'phish_prob': round(prob * 100, 1),
+            'label': str(label),
+            'phish_prob': float(round(prob * 100, 1)),
             'keywords': keywords
         })
     except Exception as e:
+        print(f"預測出錯: {e}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
