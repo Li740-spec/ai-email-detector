@@ -1,79 +1,89 @@
-import os
-import joblib
-import re
+import os, joblib, re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
+# 徹底開放 CORS 權限
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+# 載入預訓練模型 (加上 try-except 防止模型遺失導致伺服器崩潰)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# 載入模型
 try:
     clf = joblib.load(os.path.join(BASE_DIR, 'clf_zh.joblib'))
     tfidf = joblib.load(os.path.join(BASE_DIR, 'tfidf_zh.joblib'))
-    print("✅ 引擎載入成功")
+    print("✅ AI 偵測引擎載入成功")
 except Exception as e:
     clf = None
+    tfidf = None
+    print(f"❌ 模型載入失敗: {e}")
 
-# --- 變聰明的關鍵：自定義威脅字典 ---
-# 這些組合如果同時出現，代表威脅性極高
-THREAT_PATTERNS = [
-    (r'登入|驗證|鎖定', 0.15),   # 動作誘導
-    (r'俄羅斯|莫斯科|未知裝置', 0.2), # 地理位置異常
-    (r'立即|儘快|24小時', 0.1),  # 急迫性
-    (r'http://', 0.25)          # 不安全連結
-]
+# --- 新增：根目錄路由，防止出現 Not Found ---
+@app.route('/')
+def home():
+    return "AI Email Detector Expert System is Running! (Endpoint: /predict)"
+
+# --- 進階聰明邏輯：意圖偵測模式 ---
+INTENT_PATTERNS = {
+    "unauthorized_access": r"(登入|存取|訪問).*(異常|未知|設備|位置|裝置)", 
+    "account_threat": r"(封鎖|停用|鎖定|刪除|限制).*(帳戶|帳號|功能)",
+    "urgent_action": r"(立即|儘快|24小時|期限).*(驗證|更新|點擊|登入)"
+}
 
 @app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
-    if request.method == 'OPTIONS': return '', 200
+    if request.method == 'OPTIONS': 
+        return '', 200
     try:
         data = request.get_json()
         text = data.get('text', '')
 
-        # 1. 基礎 AI 分數
-        vec = tfidf.transform([text])
-        prob = float(clf.predict_proba(vec)[0][1])
+        if not clf or not tfidf:
+            return jsonify({'error': '模型未就緒'}), 500
 
-        # 2. 深度語意分析 (Smart Reasoning)
-        # 我們不只是加分，而是去尋找「威脅組合」
-        reasoning_bonus = 0
-        for pattern, weight in THREAT_PATTERNS:
+        # 1. 執行 AI 模型基礎預測
+        vec = tfidf.transform([text])
+        ai_prob = float(clf.predict_proba(vec)[0][1])
+
+        # 2. 意圖推理 (Intent Reasoning)
+        reasoning_score = 0
+        detected_intents = []
+        for intent, pattern in INTENT_PATTERNS.items():
             if re.search(pattern, text):
-                reasoning_bonus += weight
+                reasoning_score += 0.15
+                detected_intents.append(intent)
+
+        # 3. 處理連結安全性 (結構分析)
+        if re.search(r'http://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text):
+            reasoning_score += 0.2
+
+        # 4. 最終整合與判定
+        final_prob = min(ai_prob + reasoning_score, 1.0)
         
-        # 3. 排除無意義雜訊 (讓關鍵字變聰明)
-        # 這些詞會干擾 AI 判斷，我們在顯示時過濾掉
-        noise_words = ['您的', '我們', '您可以', 'og', 'html', 'div', '帳戶', 'google']
-        
+        # 關鍵字過濾：排除長度小於 2 的字，並排除常見雜訊
         feature_names = tfidf.get_feature_names_out()
         weights = vec.toarray()[0]
-        # 抓取權重高的詞，但排除掉雜訊
         top_indices = weights.argsort()[::-1]
+        
+        # 排除清單
+        stop_words = ['您的', '我們', '您可以', 'og', 'html', 'div']
         keywords = []
         for i in top_indices:
             word = str(feature_names[i])
-            if word not in noise_words and weights[i] > 0:
+            if len(word) > 1 and word not in stop_words and weights[i] > 0:
                 keywords.append(word)
             if len(keywords) >= 3: break
 
-        # 最終邏輯：AI 分數 + 深度分析分數
-        final_score = min(prob + reasoning_bonus, 1.0)
-        
-        # 恢復 0.5 的標準門檻，因為我們已經讓分數本身變精確了
-        label = 'phishing' if final_score >= 0.5 else 'safe'
-
         return jsonify({
-            'label': label,
-            'phish_prob': round(final_score * 100, 1),
+            'label': 'phishing' if final_prob >= 0.5 else 'safe',
+            'phish_prob': round(final_prob * 100, 1),
             'keywords': keywords,
-            'reasoning': "偵測到異常登入活動與急迫性語法" if reasoning_bonus > 0.2 else "一般郵件語意"
+            'reasoning_intents': detected_intents
         })
     except Exception as e:
+        print(f"Error: {e}")
         return jsonify({'error': str(e)}), 500
 
+# --- 針對 Render 的啟動設定 ---
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
