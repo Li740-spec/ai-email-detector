@@ -1,72 +1,57 @@
-const API_BASE = 'https://ai-email-detector-iuns.onrender.com';
-let lastCapturedText = "";
+document.getElementById('checkBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('checkBtn');
+  const probText = document.getElementById('probText');
+  const gaugeFill = document.getElementById('gaugeFill');
+  const statusMsg = document.getElementById('statusMsg');
+  const badgeContainer = document.getElementById('badgeContainer');
 
-document.addEventListener('DOMContentLoaded', function() {
-    const btn = document.getElementById('detect-btn');
-    const res = document.getElementById('result');
-    const farea = document.getElementById('feedback-area');
+  // --- 重點：請將網址換成你 Render 的真實網址 ---
+  const API_URL = 'https://ai-email-detector-1.onrender.com/predict';
 
-    btn.addEventListener('click', () => {
-        res.innerHTML = "🔍 正在讀取內容並喚醒 AI...";
-        farea.style.display = "none";
+  btn.disabled = true;
+  btn.innerText = "掃描中...";
+  statusMsg.innerText = "正在分析郵件語意...";
 
-        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
-            if (!tabs[0]) return;
-            chrome.tabs.sendMessage(tabs[0].id, {action: "get_gmail_content"}, (response) => {
-                
-                if (!response || !response.content) {
-                    res.innerHTML = "<b style='color:orange'>⚠️ 找不到內容！<br>請先點開一封郵件</b>";
-                    return;
-                }
-
-                lastCapturedText = response.content;
-                res.innerHTML = "🚀 分析中...<br><small>首次偵測約需 30 秒</small>";
-
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 60000);
-
-                fetch(`${API_BASE}/predict`, {
-                    method: 'POST',
-                    mode: 'cors',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({text: lastCapturedText}),
-                    signal: controller.signal
-                })
-                .then(r => r.json())
-                .then(data => {
-                    clearTimeout(timeoutId);
-                    let color = data.label === 'phishing' ? '#c0392b' : '#27ae60';
-                    let statusText = data.label === 'phishing' ? '🚩 警告：這是釣魚郵件！' : '✅ 安全：這是一般郵件';
-                    
-                    res.innerHTML = `
-                        <b style="color: ${color}; font-size: 15px;">${statusText}</b>
-                        <div class="progress-container">
-                            <div class="progress-bar" style="width: ${data.phish_prob}%; background: ${color};"></div>
-                        </div>
-                        <div style="font-size: 12px; display: flex; justify-content: space-between;">
-                            <span>風險值: ${data.phish_prob}%</span>
-                            <span>關鍵特徵: ${data.keywords.length > 0 ? data.keywords.join(', ') : '無'}</span>
-                        </div>
-                    `;
-                    farea.style.display = "block";
-                })
-                .catch(e => {
-                    clearTimeout(timeoutId);
-                    res.innerHTML = "<span style='color:red'>❌ 連線超時<br>請確認伺服器已啟動後重試</span>";
-                });
-            });
-        });
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    
+    // 注入內容抓取
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.body.innerText
     });
 
-    document.getElementById('fb-safe').onclick = () => sendFb('safe');
-    document.getElementById('fb-phish').onclick = () => sendFb('phishing');
+    const emailContent = results[0].result;
 
-    function sendFb(l) {
-        fetch(`${API_BASE}/feedback`, {
-            method: 'POST',
-            mode: 'cors',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({text: lastCapturedText, label: l})
-        }).then(() => alert("感謝回饋！AI 模型將在下次更新中學習。"));
-    }
+    const response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: emailContent })
+    });
+
+    if (!response.ok) throw new Error('API 回應錯誤');
+
+    const data = await response.json();
+    
+    // UI 更新
+    const prob = data.phish_prob || 0;
+    probText.innerText = prob + '%';
+    
+    // 圓環動畫 (周長改為 251)
+    const offset = 251 - (251 * prob / 100);
+    gaugeFill.style.strokeDashoffset = offset;
+    gaugeFill.style.stroke = prob > 50 ? "#ff4757" : "#2ed573";
+    
+    statusMsg.innerText = prob > 50 ? "🚩 高風險：偵測到釣魚威脅" : "✅ 郵件安全";
+    statusMsg.style.color = prob > 50 ? "#ff4757" : "#2ed573";
+    badgeContainer.innerHTML = (data.threat_category || []).map(t => `<span class="badge">${t}</span>`).join('');
+
+  } catch (error) {
+    console.error("Fetch Error:", error);
+    statusMsg.innerText = "❌ 連線失敗，請檢查 API 網址";
+    statusMsg.style.color = "red";
+  } finally {
+    btn.disabled = false;
+    btn.innerText = "再次掃描";
+  }
 });
