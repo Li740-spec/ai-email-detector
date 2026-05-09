@@ -25,24 +25,26 @@ def get_heuristic_bonus(text):
     """
     bonus = 0.0
     reasons = []
+    text_lower = text.lower()
 
-    # 1. 檢查惡意頂級域名 (TLDs) - 加重權重至 0.55
+    # 1. 檢查惡意頂級域名 (TLDs)
     malicious_tlds = [r'\.top', r'\.xyz', r'\.cc', r'\.info', r'\.pw', r'\.icu']
     for tld in malicious_tlds:
-        if re.search(tld, text, re.IGNORECASE):
+        if re.search(tld, text_lower):
             bonus += 0.55 
             reasons.append("Suspicious Domain (.top/.xyz)")
             break
 
-    # 2. 檢查品牌劫持 (Brand Squatting) - 加重權重至 0.50
-    if re.search(r'google|gmail|account-verify|shopee|bank', text, re.IGNORECASE):
-        if not re.search(r'google\.com|gmail\.com|shopee\.tw', text, re.IGNORECASE):
+    # 2. 檢查品牌劫持 (Brand Squatting) 
+    # 排除校內郵件 (nkust.edu.tw) 常見的簽名檔誤判
+    if re.search(r'google|gmail|shopee|bank|verification', text_lower):
+        if not re.search(r'google\.com|gmail\.com|shopee\.tw|nkust\.edu\.tw', text_lower):
             bonus += 0.50
             reasons.append("Brand Squatting (Fake Official link)")
 
     # 3. 檢查急迫性詞組 (Urgency Cues)
     urgency_patterns = [r'立即', r'24小時', r'最後', r'異常', r'驗證碼']
-    hit_count = sum(1 for p in urgency_patterns if re.search(p, text))
+    hit_count = sum(1 for p in urgency_patterns if re.search(p, text_lower))
     if hit_count >= 2:
         bonus += 0.15
         reasons.append("High Urgency Language")
@@ -53,7 +55,7 @@ def get_heuristic_bonus(text):
 
 @app.route('/')
 def home(): 
-    return jsonify({"status": "Online", "engine_version": "2.1-Hybrid-Optimized"})
+    return jsonify({"status": "Online", "engine_version": "2.1-Hybrid-Final"})
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -65,13 +67,13 @@ def predict():
         text = data.get('text', '')
         text_lower = text.lower()
 
-        # --- [優化 1：白名單攔截器] 防止誤殺好信 ---
-        # 只要郵件包含這些官方域名，直接給低分回傳
-        safe_domains = ['nkust.edu.tw', 'gmail.com', 'canva.com', 'google.com', 'edu.tw', 'github.com']
-        if any(domain in text_lower for domain in safe_domains):
+        # --- [優化：白名單攔截器] 解決校內郵件誤判 ---
+        # 加入學校網域、常用官方網域，以及助教信箱關鍵字 (vicky923)
+        safe_keywords = ['nkust.edu.tw', 'vicky923', 'gmail.com', 'canva.com', 'google.com', 'edu.tw']
+        if any(keyword in text_lower for keyword in safe_keywords):
             return jsonify({
-                'phish_prob': 5.0, # 顯示極低風險
-                'threat_category': ["Official / Safe Domain"],
+                'phish_prob': 5.0, # 綠燈安全
+                'threat_category': ["Official / University Mail"],
                 'engine': 'White-list Bypass'
             })
 
@@ -86,17 +88,15 @@ def predict():
         # 2. 引入啟發式加權 (Heuristic Bonus)
         bonus_score, extra_cats = get_heuristic_bonus(text)
         
-        # --- [優化 2：保底加權邏輯] 確保壞信亮紅燈 ---
-        # 如果觸發了專家規則，保底分數至少 0.75 起跳 (對應紅色警戒)
+        # 3. 保底加權邏輯
         if bonus_score > 0:
             final_prob = max(0.75, min(ai_prob + bonus_score, 1.0))
         else:
             final_prob = ai_prob
         
-        # 3. 威脅類別整合
         base_cats = []
-        if re.search(r'登入|驗證|密碼', text): base_cats.append("Credential Phishing")
-        if re.search(r'中獎|免費|領取', text): base_cats.append("Lure/Baiting")
+        if re.search(r'登入|驗證|密碼', text_lower): base_cats.append("Credential Phishing")
+        if re.search(r'中獎|免費|領取', text_lower): base_cats.append("Lure/Baiting")
         
         all_categories = list(set(base_cats + extra_cats))
 
