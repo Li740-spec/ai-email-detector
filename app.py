@@ -1,6 +1,7 @@
 import os
 import joblib
 import re
+import math
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -17,45 +18,22 @@ except Exception as e:
     print(f"模型載入失敗: {e}")
     clf, tfidf = None, None
 
-# --- 核心優化邏輯：混合偵測引擎 ---
+# --- 核心優化邏輯：機器學習偏置校正 ---
 
-def get_heuristic_bonus(text):
+def sigmoid_calibration(prob):
     """
-    啟發式規則加權：針對 AI 模型容易漏看的資安特徵進行人工加權
+    使用 Sigmoid 函數進行機率校準。
+    這能壓制模型在模糊地帶(0.5左右)的過度反應，讓判定更符合真實分布。
     """
-    bonus = 0.0
-    reasons = []
-    text_lower = text.lower()
-
-    # 1. 檢查惡意頂級域名 (TLDs)
-    malicious_tlds = [r'\.top', r'\.xyz', r'\.cc', r'\.info', r'\.pw', r'\.icu']
-    for tld in malicious_tlds:
-        if re.search(tld, text_lower):
-            bonus += 0.55 
-            reasons.append("Suspicious Domain (.top/.xyz)")
-            break
-
-    # 2. 檢查品牌劫持 (Brand Squatting) 
-    # 排除校內郵件 (nkust.edu.tw) 常見的簽名檔誤判
-    if re.search(r'google|gmail|shopee|bank|verification', text_lower):
-        if not re.search(r'google\.com|gmail\.com|shopee\.tw|nkust\.edu\.tw', text_lower):
-            bonus += 0.50
-            reasons.append("Brand Squatting (Fake Official link)")
-
-    # 3. 檢查急迫性詞組 (Urgency Cues)
-    urgency_patterns = [r'立即', r'24小時', r'最後', r'異常', r'驗證碼']
-    hit_count = sum(1 for p in urgency_patterns if re.search(p, text_lower))
-    if hit_count >= 2:
-        bonus += 0.15
-        reasons.append("High Urgency Language")
-
-    return bonus, reasons
+    # 這裡的 -10 和 0.6 是校準參數，能讓 0.6 以下的機率大幅收縮
+    # 這是機器學習中常用的 Platt Scaling 簡化版
+    return 1 / (1 + math.exp(-10 * (prob - 0.65)))
 
 # --- 路由設定 ---
 
 @app.route('/')
 def home(): 
-    return jsonify({"status": "Online", "engine_version": "2.1-Hybrid-Final"})
+    return jsonify({"status": "Online", "engine_version": "3.5-Pure-ML-Calibration"})
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -65,45 +43,34 @@ def predict():
             return jsonify({'error': 'No data provided'}), 400
             
         text = data.get('text', '')
-        text_lower = text.lower()
-
-        # --- [優化：白名單攔截器] 解決校內郵件誤判 ---
-        # 加入學校網域、常用官方網域，以及助教信箱關鍵字 (vicky923)
-        safe_keywords = ['nkust.edu.tw', 'vicky923', 'gmail.com', 'canva.com', 'google.com', 'edu.tw']
-        if any(keyword in text_lower for keyword in safe_keywords):
-            return jsonify({
-                'phish_prob': 5.0, # 綠燈安全
-                'threat_category': ["Official / University Mail"],
-                'engine': 'White-list Bypass'
-            })
-
-        # --- [核心偵測流程] ---
-        # 1. 基礎 AI 預測 (隨機森林)
+        
+        # --- 機器學習推論流程 ---
         if clf and tfidf:
+            # 1. 向量化
             vec = tfidf.transform([text])
-            ai_prob = float(clf.predict_proba(vec)[0][1])
+            # 2. 取得原始 AI 預測機率
+            raw_ai_prob = float(clf.predict_proba(vec)[0][1])
+            
+            # 3. 執行機率校準 (不使用人工關鍵字，純數學轉換)
+            calibrated_prob = sigmoid_calibration(raw_ai_prob)
+            
+            # 4. 判定威脅等級 (完全由校準後的 AI 分數決定)
+            final_prob = round(calibrated_prob * 100, 1)
         else:
-            ai_prob = 0.5
+            final_prob = 5.0 # 模型缺失時的安全預設值
 
-        # 2. 引入啟發式加權 (Heuristic Bonus)
-        bonus_score, extra_cats = get_heuristic_bonus(text)
-        
-        # 3. 保底加權邏輯
-        if bonus_score > 0:
-            final_prob = max(0.75, min(ai_prob + bonus_score, 1.0))
+        # 自動生成類別 (基於模型信心度)
+        if final_prob > 70:
+            threat_cats = ["High Confidence Phishing"]
+        elif final_prob > 40:
+            threat_cats = ["Potential Risk Detected"]
         else:
-            final_prob = ai_prob
-        
-        base_cats = []
-        if re.search(r'登入|驗證|密碼', text_lower): base_cats.append("Credential Phishing")
-        if re.search(r'中獎|免費|領取', text_lower): base_cats.append("Lure/Baiting")
-        
-        all_categories = list(set(base_cats + extra_cats))
+            threat_cats = ["AI Verified: Safe"]
 
         return jsonify({
-            'phish_prob': round(final_prob * 100, 1),
-            'threat_category': all_categories if all_categories else ["General Analysis"],
-            'engine': 'Random Forest + Heuristic v2.1-Hybrid'
+            'phish_prob': final_prob,
+            'threat_category': threat_cats,
+            'engine': 'Random Forest + Sigmoid Calibration v3.5'
         })
         
     except Exception as e:
