@@ -1,21 +1,8 @@
-# 核心 Web 框架與安全協定
-Flask==2.2.5
-flask-cors==4.0.0
-gunicorn==20.1.0
-Werkzeug==2.2.3
-
-# 機器學習與數據處理 (選用穩定版本)
-scikit-learn==1.2.2
-joblib==1.2.0
-pandas==2.0.3
-numpy==1.24.3
-scipy==1.10.1
-
-# 輔助工具
-itsdangerous==2.1.2
-Jinja2==3.1.2
-MarkupSafe==2.1.2
-packaging==23.1
-python-dateutil==2.8.2
-six==1.16.0
-threadpoolctl==3.1.0
+Flask
+flask-cors
+gunicorn
+joblib
+scikit-learn
+pandas
+numpy
+scipy
