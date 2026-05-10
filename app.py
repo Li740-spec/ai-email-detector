@@ -1,18 +1,17 @@
 import os
 import math
+import joblib
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import joblib
 
 app = Flask(__name__)
-# 強化 CORS 設定，確保擴充功能穩定連線
 CORS(app)
 
-# 1. 自動偵測路徑並載入模型
-base_path = os.path.dirname(os.path.abspath(__file__))
+# 1. 載入模型
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 try:
-    model = joblib.load(os.path.join(base_path, 'clf_zh.joblib'))
-    tfidf = joblib.load(os.path.join(base_path, 'tfidf_zh.joblib'))
+    clf = joblib.load(os.path.join(BASE_DIR, 'clf_zh.joblib'))
+    tfidf = joblib.load(os.path.join(BASE_DIR, 'tfidf_zh.joblib'))
     model_loaded = True
 except Exception as e:
     print(f"模型載入失敗: {e}")
@@ -22,42 +21,53 @@ except Exception as e:
 def predict():
     try:
         data = request.get_json()
-        # 相容舊版前端可能傳送的 'text' 或新版的 'content'
-        email_content = data.get('content') or data.get('text', '')
+        text = data.get('content') or data.get('text', '')
         sender = data.get('sender', '')
-        
+
         if not model_loaded:
-            return jsonify({"error": "Server model not loaded"}), 500
+            return jsonify({"error": "Model not loaded"}), 500
 
-        # 2. 執行 AI 原始預測
-        email_tfidf = tfidf.transform([email_content])
-        raw_prob = model.predict_proba(email_tfidf)[0][1]
+        # 2. AI 原始預測 (0~1 之間)
+        vec = tfidf.transform([text])
+        ai_prob = float(clf.predict_proba(vec)[0][1])
+
+        # 3. 邏輯校準：判斷是否為校內來源
+        is_nkust = "nkust.edu.tw" in sender.lower() or "nkust.edu.tw" in text.lower()
         
-        # 3. Sigmoid 數學校準 (修正模型邊界)
-        calibrated_prob = 1 / (1 + math.exp(-10 * (raw_prob - 0.65)))
+        # 4. 關鍵字強效偵測 (防止 AI 漏看明顯的威脅)
+        danger_keywords = ['登入', '驗證', '密碼', '停用', '點擊', '更新帳戶', '異常']
+        hit_keywords = [word for word in danger_keywords if word in text]
         
-        # 4. 針對校內網域進行「信任權重偏移」
-        is_nkust = "nkust.edu.tw" in sender.lower() or "nkust.edu.tw" in email_content.lower()
-        
+        # --- 核心決策引擎 ---
         if is_nkust:
-            # 校內信：風險權重減半並加保底
-            final_prob = (calibrated_prob * 0.5) + 0.02
+            if len(hit_keywords) >= 2 or ai_prob > 0.7:
+                # 即使掛著學校網域，只要內容太像釣魚，依然判定為中高風險
+                final_prob = max(ai_prob, 0.45)
+                label = "校內網域 (但內容疑似異常)"
+            else:
+                # 真正的校內公務信：大幅降分
+                final_prob = (ai_prob * 0.2) + 0.015
+                label = "校內公務郵件 (安全)"
         else:
-            final_prob = calibrated_prob
+            # 外部郵件：完全依照 AI 判定，並對關鍵字進行加權
+            bonus = 0.15 if hit_keywords else 0.0
+            final_prob = min(ai_prob + bonus, 0.99)
+            label = "外部郵件偵測"
 
-        # 5. 最終保底機制：確保不會顯示 0.0%
-        final_prob = max(final_prob, 0.012)
-
-        status = "危險" if final_prob > 0.5 else "安全"
+        # 5. Sigmoid 曲線優化 (讓 1%~99% 的分佈更符合直覺)
+        # 確保不會死板的只有 1%，而是在 1.5%~3% 之間有細微跳動
+        final_prob = 1 / (1 + math.exp(-8 * (final_prob - 0.4)))
         
-        # 6. 回傳前端認得的欄位 (phish_prob)
+        # 最終數值校正：保底 1.5%，上限 98.5%
+        display_prob = max(min(final_prob, 0.985), 0.015)
+
         return jsonify({
-            "phish_prob": round(final_prob * 100, 1), # 前端顯示用的數字
-            "probability": f"{final_prob * 100:.1f}%",
-            "status": status,
-            "label": "AI 深度偵測完成 (v3.5)",
+            "phish_prob": round(display_prob * 100, 1),
+            "probability": f"{display_prob * 100:.1f}%",
+            "status": "危險" if display_prob > 0.5 else "安全",
+            "label": label,
             "is_official": is_nkust,
-            "engine": "Precision Engine v3.5"
+            "engine": "NKUST-Dual-Core v3.6"
         })
 
     except Exception as e:
@@ -65,12 +75,8 @@ def predict():
 
 @app.route('/')
 def home():
-    return jsonify({
-        "status": "Online",
-        "model_status": "Loaded" if model_loaded else "Error",
-        "version": "3.5-Precision-Final"
-    })
+    return jsonify({"status": "Online", "version": "3.6-Final-Precision"})
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
