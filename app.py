@@ -1,6 +1,7 @@
 import os
 import math
 import joblib
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -27,47 +28,54 @@ def predict():
         if not model_loaded:
             return jsonify({"error": "Model not loaded"}), 500
 
-        # 2. AI 原始預測 (0~1 之間)
+        # 2. AI 原始預測
         vec = tfidf.transform([text])
         ai_prob = float(clf.predict_proba(vec)[0][1])
 
-        # 3. 邏輯校準：判斷是否為校內來源
+        # 3. 診斷標籤邏輯 (就是你要找回來的那些標籤)
+        threat_categories = []
+        
+        # 檢查惡意網域特徵
+        if re.search(r'\.(top|xyz|cc|pw|icu)', text, re.IGNORECASE):
+            threat_categories.append("Suspicious Domain (.top/.xyz)")
+        
+        # 檢查急迫性文字
+        if re.search(r'立即|最後機會|24小時', text):
+            threat_categories.append("High Urgency Language")
+        
+        # 檢查憑證竊取特徵
+        if re.search(r'登入|驗證|密碼|更新帳戶', text):
+            threat_categories.append("Credential Phishing")
+
+        # 4. 核心決策與校準
         is_nkust = "nkust.edu.tw" in sender.lower() or "nkust.edu.tw" in text.lower()
         
-        # 4. 關鍵字強效偵測 (防止 AI 漏看明顯的威脅)
-        danger_keywords = ['登入', '驗證', '密碼', '停用', '點擊', '更新帳戶', '異常']
-        hit_keywords = [word for word in danger_keywords if word in text]
-        
-        # --- 核心決策引擎 ---
         if is_nkust:
-            if len(hit_keywords) >= 2 or ai_prob > 0.7:
-                # 即使掛著學校網域，只要內容太像釣魚，依然判定為中高風險
-                final_prob = max(ai_prob, 0.45)
-                label = "校內網域 (但內容疑似異常)"
-            else:
-                # 真正的校內公務信：大幅降分
+            # 校內信且沒有明顯威脅特徵，才給予降分
+            if len(threat_categories) == 0:
                 final_prob = (ai_prob * 0.2) + 0.015
-                label = "校內公務郵件 (安全)"
+                status_text = "安全：校內公務信件"
+            else:
+                final_prob = max(ai_prob, 0.42) # 有威脅特徵則維持中度風險
+                status_text = "警示：校內來源但內容可疑"
         else:
-            # 外部郵件：完全依照 AI 判定，並對關鍵字進行加權
-            bonus = 0.15 if hit_keywords else 0.0
+            # 外部郵件，根據 AI 與標籤數量加成
+            bonus = len(threat_categories) * 0.1
             final_prob = min(ai_prob + bonus, 0.99)
-            label = "外部郵件偵測"
+            status_text = "危險：偵測到釣魚威脅" if final_prob > 0.5 else "安全：外部郵件"
 
-        # 5. Sigmoid 曲線優化 (讓 1%~99% 的分佈更符合直覺)
-        # 確保不會死板的只有 1%，而是在 1.5%~3% 之間有細微跳動
-        final_prob = 1 / (1 + math.exp(-8 * (final_prob - 0.4)))
-        
-        # 最終數值校正：保底 1.5%，上限 98.5%
-        display_prob = max(min(final_prob, 0.985), 0.015)
+        # Sigmoid 平滑處理
+        display_prob = 1 / (1 + math.exp(-8 * (final_prob - 0.45)))
+        display_prob = max(min(display_prob, 0.985), 0.015)
 
+        # 5. 回傳所有前端需要的欄位
         return jsonify({
-            "phish_prob": round(display_prob * 100, 1),
+            "phish_prob": round(display_prob * 100, 1), # 顯示圓圈百分比
             "probability": f"{display_prob * 100:.1f}%",
             "status": "危險" if display_prob > 0.5 else "安全",
-            "label": label,
-            "is_official": is_nkust,
-            "engine": "NKUST-Dual-Core v3.6"
+            "threat_category": threat_categories if threat_categories else ["General Analysis"], # 這是你要的標籤！
+            "label": status_text,
+            "is_official": is_nkust
         })
 
     except Exception as e:
@@ -75,7 +83,7 @@ def predict():
 
 @app.route('/')
 def home():
-    return jsonify({"status": "Online", "version": "3.6-Final-Precision"})
+    return jsonify({"status": "Online", "version": "3.7-Diagnosis-Restore"})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
